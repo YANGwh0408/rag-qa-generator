@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <script>
+      try {
+        if (localStorage.getItem("qa-tool-theme") === "dark") {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      } catch (e) {}
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>知识库问答生成工具</title>
+    <link rel="stylesheet" href="/static/style.css?v=28" />
+  </head>
+  <body>
+    <canvas id="particles-canvas" aria-hidden="true"></canvas>
+    <div id="toast-host" class="toast-host" aria-live="polite"></div>
+
+    <div id="server-banner" class="banner banner-warn" hidden>
+      <strong>未连接到后端服务。</strong>
+      请在项目目录执行：
+      <code>.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8765</code>
+      ，然后用浏览器访问 <code>http://127.0.0.1:8765</code>。
+      <span class="banner-note">不要双击用「文件」方式打开本页的 HTML，否则接口无法调用。</span>
+    </div>
+    <div class="wrap">
+      <header class="site-header">
+        <div class="site-header-text">
+          <h1>知识库问答生成工具</h1>
+        </div>
+        <button type="button" class="btn-theme" id="btn-theme" aria-label="切换浅色或深色外观" title="切换主题">
+          <span class="btn-theme-icon" aria-hidden="true">🌙</span>
+          <span class="btn-theme-label">深色模式</span>
+        </button>
+      </header>
+
+      <section class="card card-glass">
+        <h2>输入</h2>
+        <div class="field">
+          <label for="dropzone">文档（可多选 / 拖拽）：PDF、Word(.docx)、Markdown、TXT</label>
+          <div class="dropzone" id="dropzone">
+            <input
+              type="file"
+              id="file-input"
+              accept=".pdf,.docx,.md,.markdown,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+              multiple
+            />
+            <span>点击或拖拽文件到此处（可多次添加）</span>
+          </div>
+        </div>
+        <div class="uploaded-panel" id="uploaded-panel">
+          <div class="uploaded-panel-head">
+            <span class="uploaded-title">已上传文件</span>
+            <span class="uploaded-count" id="uploaded-count-label">共上传了 0 个文档</span>
+          </div>
+          <p class="uploaded-empty" id="uploaded-empty">暂无上传文档</p>
+          <ul class="uploaded-list" id="uploaded-list" hidden></ul>
+        </div>
+        <div id="document-transfer-panel" class="document-transfer-panel" hidden>
+          <div class="document-transfer-head">
+            <span id="document-transfer-title" class="document-transfer-title">传输进度</span>
+            <span id="document-transfer-badge" class="document-transfer-badge"></span>
+          </div>
+          <div class="document-transfer-track">
+            <div id="document-transfer-bar" class="document-transfer-bar" style="width: 0%"></div>
+          </div>
+          <p class="document-transfer-hint" id="document-transfer-hint"></p>
+        </div>
+        <div class="grid-2 preview-options">
+          <div class="field">
+            <label for="preview_max_chars">预览最多显示字符数</label>
+            <input type="number" id="preview_max_chars" value="1000" min="1000" max="500000" step="1000" />
+            <p class="hint">生成 Q&amp;A 仍使用完整提取结果。</p>
+          </div>
+          <div class="field">
+            <label for="preview_full">或一键尽量看全</label>
+            <select id="preview_full">
+              <option value="0" selected>按左侧字数上限</option>
+              <option value="500000">尽量全文（上限 50 万）</option>
+            </select>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="btn-secondary" id="btn-preview">预览提取文本</button>
+        </div>
+        <p class="hint preview-extract-hint">
+          此处按字符上限截断，仅核对提取；生成仍用全文。
+        </p>
+        <div id="preview-result-wrap" class="preview-result-wrap" hidden>
+          <div class="preview-result-head">
+            <span class="preview-result-title">提取文本预览</span>
+            <button type="button" class="btn-secondary btn-preview-close" id="btn-preview-close">收起</button>
+          </div>
+          <div class="preview-panel-body" id="preview-status" hidden></div>
+        </div>
+      </section>
+
+      <section class="card card-glass">
+        <h2>多模型生成</h2>
+        <p class="hint">
+          调用顺序为<strong>按列表从上到下</strong>：先由<strong>第 1 个模型</strong>跑完<strong>所有片段 × 所有循环轮次</strong>，再同样跑完第 2 个模型，以此类推。
+        </p>
+        <div id="models-list" class="models-list">
+          <div class="model-row card-nested" data-model-row>
+            <div class="model-row-head">
+              <span class="model-row-title">模型端点</span>
+              <button type="button" class="btn-secondary btn-remove-model" disabled>移除此模型</button>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>显示名称（表格「模型」列，可空）</label>
+                <input type="text" data-field="label" placeholder="例如：GPT-4o / 内部 Claude" />
+              </div>
+              <div class="field">
+                <label>调用方式</label>
+                <select data-field="provider">
+                  <option value="openai_compatible" selected>LLM Center / OpenAI 兼容</option>
+                  <option value="gemini">Google Gemini（官方 API）</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>模型 ID</label>
+                <input type="text" data-field="model" placeholder="平台模型 ID" />
+              </div>
+              <div class="field">
+                <label>API Key</label>
+                <input type="password" data-field="api_key" autocomplete="off" placeholder="仅保存在本页内存" />
+              </div>
+            </div>
+            <div class="field model-base-row">
+              <label>Base URL</label>
+              <input
+                type="text"
+                data-field="base_url"
+                value="https://llm-center.ali.modelbest.co/llm"
+                placeholder="兼容模式：主模型必填；第 2 条起留空则与主模型相同"
+              />
+            </div>
+            <div class="field model-protocol-row">
+              <label>LLM Center 多协议</label>
+              <select data-field="center_protocol">
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic（Claude）</option>
+                <option value="google">Google Gemini 原生</option>
+              </select>
+            </div>
+            <div class="field model-compat-auth-row" hidden>
+              <label>兼容网关鉴权</label>
+              <select data-field="compat_auth">
+                <option value="bearer">Authorization: Bearer</option>
+                <option value="api_key">api-key 头</option>
+                <option value="x_api_key">X-API-Key</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="btn-secondary" id="btn-add-model">添加模型</button>
+        </div>
+      </section>
+
+      <section class="card card-glass">
+        <h2>切片与调用</h2>
+        <details class="prompt-rules">
+          <summary>参数说明</summary>
+          <ul class="prompt-rules-list">
+            <li>
+              <strong>单次阅读多少字：</strong>每一小截文档最长大约多少<strong>汉字/英文字母</strong>一起送给模型。数字<strong>越大</strong>，单次看得越多，上下文更完整，但一次请求更「吃力气」，失败或超时时代价也更大；<strong>越小</strong>，切得越碎，调用次数变多、总时间可能变长。
+            </li>
+            <li>
+              <strong>相邻两段重复一点：</strong>上一段的末尾和下一段的开头会<strong>故意重复一小段</strong>，避免刚好从一句话中间切开，导致前后接不上、漏信息。
+            </li>
+            <li>
+              <strong>Markdown 按标题切：</strong>仅对<strong>文件名以 .md / .markdown 结尾</strong>的上传生效。按行首 <code>#</code> 形式的标题（1～6 级）在您选定的那一级<strong>新开一段</strong>；标题前若有前言会单独成段。若全文没有该级标题，或某一节仍太长，会<strong>自动再用「单次阅读多少字」</strong>切细。PDF、Word、纯文本等仍按字数切。
+            </li>
+            <li>
+              <strong>同一段多问几遍：</strong>同一个小片段可以让模型<strong>再答一轮、再答一轮</strong>，多挖几批题。总次数大致是：文档小段数 × 这里填的遍数 × 模型个数（模型多也会成倍增加）。
+            </li>
+            <li>
+              <strong>每小段出几道题：</strong>不在下面填，请到<strong>出题说明 → 数量策略</strong>里用<strong>平常说话</strong>写清楚（例如固定多少对，或交给模型看内容决定）。
+            </li>
+            <li>
+              <strong>回答有多「敢发挥」：</strong>可以理解成<strong>创意程度</strong>。数字<strong>低</strong>，模型更老实、更贴着原文写，适合入库检索；数字<strong>高</strong>，更容易联想、发挥，偶尔可能多写原文没有的东西。
+            </li>
+            <li>
+              <strong>网络不稳时多试几次：</strong>某一截出题失败时，程序会<strong>自动隔几秒再试</strong>；试完仍失败会<strong>跳过这一截</strong>，前面已经成功的<strong>不会丢</strong>。若<strong>密钥写错</strong>，一般会<strong>整单停掉</strong>，避免白花钱。
+            </li>
+            <li>
+              <strong>单次回答最长允许多长（兼容网关）：</strong>限制模型<strong>这一次最多能写多长</strong>。要出的题目很多、答案很长时，需要留足空间，否则回复可能被<strong>截断半截</strong>，表格会缺题。走公司<strong>兼容接口</strong>时才需要关心这一项。
+            </li>
+            <li>
+              <strong>API 调用模式：</strong>默认<strong>单线程</strong>，按顺序一段一段调用，最稳定。开启<strong>多线程</strong>后可同时发起多个请求，整体更快；并发数无硬性上限，若设得过大可能在<strong>本地运行日志</strong>里出现限流、超时等报错，建议从默认并发 5 开始逐步调整。
+            </li>
+          </ul>
+        </details>
+        <div class="grid-2">
+          <div class="field">
+            <label for="chunk_size">单次阅读多少字（约）</label>
+            <input type="number" id="chunk_size" value="3000" min="500" step="100" />
+            <p class="hint">模型每一次阅读多少字。</p>
+          </div>
+          <div class="field">
+            <label for="chunk_overlap">相邻两段重复多少字</label>
+            <input type="number" id="chunk_overlap" value="360" min="0" step="50" />
+            <p class="hint">避免刚好从一句话中间切开。</p>
+          </div>
+          <div class="field field-span-2 md-split-panel">
+            <div class="md-split-panel-inner">
+              <label class="md-switch">
+                <input type="checkbox" id="markdown_heading_split" />
+                <span class="md-switch-ui" aria-hidden="true"></span>
+                <span class="md-switch-text">Markdown 按标题切分</span>
+              </label>
+              <p class="md-split-lead">仅对 <code>.md</code> / <code>.markdown</code> 上传文件生效</p>
+              <div class="md-split-level-block">
+                <div class="md-split-level-head">
+                  <span class="md-split-level-title" id="md-level-caption">在哪一级标题处切开</span>
+                  <span class="md-split-level-hint" aria-hidden="true">ATX <code>#</code> 标题</span>
+                </div>
+                <div class="segment-scroll" role="presentation">
+                  <div
+                    class="segmented segment-md-level"
+                    role="radiogroup"
+                    aria-labelledby="md-level-caption"
+                  >
+                    <input type="radio" name="markdown_heading_level" id="md_level_1" value="1" class="visually-hidden" />
+                    <label for="md_level_1" title="一级 #">H1</label>
+                    <input type="radio" name="markdown_heading_level" id="md_level_2" value="2" class="visually-hidden" checked />
+                    <label for="md_level_2" title="二级 ##">H2</label>
+                    <input type="radio" name="markdown_heading_level" id="md_level_3" value="3" class="visually-hidden" />
+                    <label for="md_level_3" title="三级 ###">H3</label>
+                    <input type="radio" name="markdown_heading_level" id="md_level_4" value="4" class="visually-hidden" />
+                    <label for="md_level_4" title="四级 ####">H4</label>
+                    <input type="radio" name="markdown_heading_level" id="md_level_5" value="5" class="visually-hidden" />
+                    <label for="md_level_5" title="五级 #####">H5</label>
+                    <input type="radio" name="markdown_heading_level" id="md_level_6" value="6" class="visually-hidden" />
+                    <label for="md_level_6" title="六级 ######">H6</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p class="hint md-split-foot" id="markdown_heading_split_hint">
+              未勾选时不会按标题切，过长小节仍按「单次阅读多少字」再切。
+            </p>
+          </div>
+          <div class="field">
+            <label for="loop_count">同一段让模型答几轮</label>
+            <input type="number" id="loop_count" value="1" min="1" max="10" />
+            <p class="hint">同一小片段多跑几轮可以多挖几批题；想多要题可加大，费用和时间也会增加。</p>
+          </div>
+          <div class="field">
+            <label for="temperature">创意程度（越低越贴原文）</label>
+            <input type="number" id="temperature" value="0.35" min="0" max="2" step="0.05" />
+            <p class="hint">默认偏低，减少「编故事」；希望回答更活泼、更发散时可略调高。</p>
+          </div>
+          <div class="field">
+            <label for="max_retries">网络不稳时自动多试几次</label>
+            <input type="number" id="max_retries" value="3" min="0" max="10" />
+            <p class="hint">某一截失败会自动隔一会再试；仍失败会跳过该截，已成功的保留。密钥错误通常会整单停止。</p>
+          </div>
+          <div class="field" id="max-tokens-row">
+            <label for="max_tokens">单次回答最长（兼容网关）</label>
+            <input type="number" id="max_tokens" value="8192" min="256" max="128000" step="256" />
+            <p class="hint">题目很多时要留够长度，否则回复可能被截断。走 Gemini 官方等可忽略含义，兼容网关时建议保持默认或按需加大。</p>
+          </div>
+          <div class="field field-span-2 parallel-panel">
+            <div class="md-split-panel-inner">
+              <label class="md-switch">
+                <input type="checkbox" id="parallel_enabled" />
+                <span class="md-switch-ui" aria-hidden="true"></span>
+                <span class="md-switch-text">多线程并行调用 API</span>
+              </label>
+              <p class="hint parallel-mode-hint" id="parallel_mode_hint">
+                当前：单线程（按顺序逐段调用，更稳定）
+              </p>
+              <div class="parallel-settings" id="parallel_settings" hidden>
+                <div class="parallel-settings-inner">
+                  <label for="parallel_concurrency">并发数</label>
+                  <input type="number" id="parallel_concurrency" value="5" min="1" step="1" />
+                  <p class="hint">
+                    同时发起的 API 请求数量，默认 5，无上限。并发过大时可能在下方「本地运行日志」里看到报错，建议逐步调高。
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="btn-row btn-row-chunk-preview">
+          <button type="button" class="btn-secondary" id="btn-preview-chunks">单次阅读预览</button>
+        </div>
+        <p class="hint chunk-preview-hint">
+          展示已上传文档切成的<strong>前 6 块</strong>原文，方便用户确认切片。
+        </p>
+        <div id="chunk-preview-result-wrap" class="chunk-preview-result-wrap" hidden>
+          <div class="chunk-preview-result-head">
+            <span class="chunk-preview-result-title">单次阅读预览</span>
+            <button type="button" class="btn-secondary btn-chunk-preview-close" id="btn-chunk-preview-close">收起</button>
+          </div>
+          <div class="preview-panel-body" id="chunk-preview-status" hidden></div>
+        </div>
+      </section>
+
+      <section class="card card-glass">
+        <h2>出题说明</h2>
+        <ul class="prompt-segment-notes">
+          <li>大模型会结合您的文档内容与您填写的说明来出题，请尽量写清楚、写具体。</li>
+          <li>若某次结果不理想，可微调对应小项后重新生成。</li>
+        </ul>
+        <h3 class="prompt-subhead">按下面六项填写（可不改）</h3>
+        <div class="merged-segments-grid">
+          <div class="field">
+            <label for="seg_task_form">任务形式</label>
+            <textarea id="seg_task_form" class="prompt-editor prompt-editor-sm" rows="3" spellcheck="false"></textarea>
+          </div>
+          <div class="field">
+            <label for="seg_question_difficulty">问题难度</label>
+            <textarea id="seg_question_difficulty" class="prompt-editor prompt-editor-sm" rows="3" spellcheck="false"></textarea>
+          </div>
+          <div class="field">
+            <label for="seg_answer_length">答案长度</label>
+            <textarea id="seg_answer_length" class="prompt-editor prompt-editor-sm" rows="3" spellcheck="false"></textarea>
+          </div>
+          <div class="field">
+            <label for="seg_language_style">语言风格</label>
+            <textarea id="seg_language_style" class="prompt-editor prompt-editor-sm" rows="3" spellcheck="false"></textarea>
+          </div>
+          <div class="field">
+            <label for="seg_quantity_strategy">数量策略</label>
+            <textarea id="seg_quantity_strategy" class="prompt-editor prompt-editor-sm" rows="3" spellcheck="false"></textarea>
+            <p class="hint segment-field-hint">
+              如果想指定问答对生成数量，请在本框中明确，例如：「本片段必须生成 30 组互不重复的中文问答对」。<strong>注意：</strong>本框只能约束每个切片的问答对生成数量，不能约束整篇文档的问答对生成数量。
+            </p>
+          </div>
+          <div class="field">
+            <label for="seg_content_coverage">内容覆盖</label>
+            <textarea id="seg_content_coverage" class="prompt-editor prompt-editor-sm" rows="3" spellcheck="false"></textarea>
+          </div>
+        </div>
+        <details class="full-prompt-readonly-wrap">
+          <summary class="full-prompt-readonly-summary">完整prompt</summary>
+          <p class="hint full-prompt-readonly-hint">
+            内置模板（含 <code>{text}</code>、<code>{round}</code> 等与六项出题说明占位符），仅供查阅，<strong>不可编辑</strong>；生成时会自动填入当前片段与您的说明后再发送。
+          </p>
+          <pre
+            class="full-prompt-readonly"
+            id="merged_prompt_readonly"
+            tabindex="0"
+            aria-label="完整 prompt 模板，只读"
+          ></pre>
+        </details>
+      </section>
+
+      <section class="card card-glass">
+        <h2>运行与日志</h2>
+        <div class="btn-row">
+          <button type="button" class="btn-primary" id="btn-generate">开始生成 Q&amp;A</button>
+          <button type="button" class="btn-stop" id="btn-stop-generate" disabled>停止生成</button>
+          <button type="button" class="btn-secondary" id="btn-download-json" disabled>下载 JSON</button>
+          <button type="button" class="btn-secondary" id="btn-download-csv" disabled>下载 CSV</button>
+          <button type="button" class="btn-secondary" id="btn-download-md" disabled>下载 Markdown</button>
+          <button type="button" class="btn-secondary" id="btn-clear-log">清空日志</button>
+        </div>
+        <div id="gen-progress" class="gen-progress" hidden>
+          <div class="gen-progress-track">
+            <div id="gen-progress-bar" class="gen-progress-bar" style="width: 0%"></div>
+          </div>
+          <div id="gen-progress-label" class="gen-progress-label">准备中…</div>
+        </div>
+        <div class="field log-field">
+          <label for="run-log">本地运行日志（进度 / 重试 / 警告）</label>
+          <textarea id="run-log" class="run-log" readonly rows="8" placeholder="生成开始后此处追加日志…"></textarea>
+        </div>
+        <div class="status" id="gen-status" hidden></div>
+      </section>
+
+      <section class="card card-glass" id="result-section" hidden>
+        <h2 id="result-heading">结果</h2>
+        <div class="table-wrap">
+          <table id="result-table">
+            <thead id="result-head"></thead>
+            <tbody id="result-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <script src="/static/app.js?v=38"></script>
+  </body>
+</html>
